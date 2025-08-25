@@ -12,7 +12,7 @@ public:
   {
     publisher_ = this->create_publisher<sensor_msgs::msg::Image>("camera/image_raw", 10);
     timer_ = this->create_wall_timer(
-      std::chrono::milliseconds(330),  // ~30 FPS
+      std::chrono::milliseconds(33),  // ~30 FPS
       std::bind(&CameraPublisher::timer_callback, this));
 
     if (!cap_.isOpened()) {

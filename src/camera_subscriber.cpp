@@ -32,15 +32,10 @@ private:
       std::vector<cv::Mat> outputs;
       net_.forward(outputs, net_.getUnconnectedOutLayersNames());
 
-      cv::Mat pred = outputs[0]; // 1xNx85
-      RCLCPP_INFO(this->get_logger(), "pred[0]size:%d", pred.size[0]);
-      RCLCPP_INFO(this->get_logger(), "pred[0]size:%d", pred.size[1]);
+      cv::Mat pred = outputs[0];                 // 1xNx85
       pred = pred.reshape(1, pred.total() / 85); // reshape do Nx85
 
       // Draw detections (simplified)
-      RCLCPP_INFO(this->get_logger(), "pred[0]total:%ld", pred.total());
-      RCLCPP_INFO(this->get_logger(), "pred[0]cols:%d", pred.cols);
-
       RCLCPP_INFO(this->get_logger(), "\nDetected objects:%d", pred.rows);
 
       float x_factor = float(frame.cols) / 640.0f;
@@ -63,6 +58,21 @@ private:
           RCLCPP_INFO(this->get_logger(),
                       "x:%d y:%d w:%f h:%f width:%d height:%d", x, y, w, h, width, height);
           cv::rectangle(frame, cv::Rect(x, y, width, height), cv::Scalar(0, 255, 0), 2);
+          // class scores
+          cv::Mat scores = pred.row(i).colRange(5, pred.cols);
+          cv::Point classIdPoint;
+          double maxClassScore;
+          cv::minMaxLoc(scores, 0, &maxClassScore, 0, &classIdPoint);
+
+          if (maxClassScore * conf > 0.5)
+          { // optional combined threshold
+            int class_id = classIdPoint.x;
+            std::string label = class_names[class_id];
+
+            // Draw rectangle and put text
+            cv::rectangle(frame, cv::Rect(x, y, width, height), cv::Scalar(255, 0, 0), 2);
+            cv::putText(frame, label, cv::Point(x, y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
+          }
         }
       }
 
@@ -77,6 +87,15 @@ private:
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
   cv::dnn::Net net_;
+  std::vector<std::string> class_names = {
+      "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light",
+      "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
+      "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
+      "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle",
+      "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
+      "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant", "bed",
+      "dining table", "toilet", "TV", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven",
+      "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"};
 };
 
 int main(int argc, char *argv[])
