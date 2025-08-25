@@ -23,57 +23,73 @@ private:
   {
     try
     {
-      auto frame = cv_bridge::toCvCopy(msg, "bgr8")->image;
+      // Convert ROS image to OpenCV
+      cv::Mat frame = cv_bridge::toCvCopy(msg, "bgr8")->image;
+
       // Preprocess for YOLO
-      cv::Mat blob = cv::dnn::blobFromImage(frame, 1 / 255.0, cv::Size(640, 640), cv::Scalar(), true, false);
+      const cv::Size inputSize(640, 640);
+      cv::Mat blob = cv::dnn::blobFromImage(frame, 1.0 / 255.0, inputSize, cv::Scalar(), true, false);
       net_.setInput(blob);
 
-      // Run inference
+      // Forward pass
       std::vector<cv::Mat> outputs;
       net_.forward(outputs, net_.getUnconnectedOutLayersNames());
 
-      cv::Mat pred = outputs[0];                 // 1xNx85
-      pred = pred.reshape(1, pred.total() / 85); // reshape do Nx85
+      cv::Mat pred = outputs[0].reshape(1, outputs[0].total() / 85); // Nx85
+      RCLCPP_INFO(this->get_logger(), "Detected objects: %d", pred.rows);
 
-      // Draw detections (simplified)
-      RCLCPP_INFO(this->get_logger(), "\nDetected objects:%d", pred.rows);
+      // Scaling factors from 640x640 to original frame
+      const float x_factor = float(frame.cols) / inputSize.width;
+      const float y_factor = float(frame.rows) / inputSize.height;
 
-      float x_factor = float(frame.cols) / 640.0f;
-      float y_factor = float(frame.rows) / 640.0f;
+      // Containers for NMS
+      std::vector<cv::Rect> boxes;
+      std::vector<float> confidences;
+      std::vector<int> classIds;
 
       for (int i = 0; i < pred.rows; i++)
       {
         float conf = pred.at<float>(i, 4);
-        if (conf > 0.5)
-        {
-          float cx = pred.at<float>(i, 0);
-          float cy = pred.at<float>(i, 1);
-          float w = pred.at<float>(i, 2);
-          float h = pred.at<float>(i, 3);
+        if (conf < 0.5)
+          continue; // skip low confidence
 
-          int x = int((cx - w / 2) * x_factor);
-          int y = int((cy - h / 2) * y_factor);
-          int width = int(w * x_factor);
-          int height = int(h * y_factor);
-          RCLCPP_INFO(this->get_logger(),
-                      "x:%d y:%d w:%f h:%f width:%d height:%d", x, y, w, h, width, height);
-          cv::rectangle(frame, cv::Rect(x, y, width, height), cv::Scalar(0, 255, 0), 2);
-          // class scores
-          cv::Mat scores = pred.row(i).colRange(5, pred.cols);
-          cv::Point classIdPoint;
-          double maxClassScore;
-          cv::minMaxLoc(scores, 0, &maxClassScore, 0, &classIdPoint);
+        // Bounding box coordinates
+        float cx = pred.at<float>(i, 0);
+        float cy = pred.at<float>(i, 1);
+        float w = pred.at<float>(i, 2);
+        float h = pred.at<float>(i, 3);
 
-          if (maxClassScore * conf > 0.5)
-          { // optional combined threshold
-            int class_id = classIdPoint.x;
-            std::string label = class_names[class_id];
+        int x = int((cx - w / 2.0f) * x_factor);
+        int y = int((cy - h / 2.0f) * y_factor);
+        int width = int(w * x_factor);
+        int height = int(h * y_factor);
 
-            // Draw rectangle and put text
-            cv::rectangle(frame, cv::Rect(x, y, width, height), cv::Scalar(255, 0, 0), 2);
-            cv::putText(frame, label, cv::Point(x, y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
-          }
-        }
+        // Class detection
+        cv::Mat scores = pred.row(i).colRange(5, pred.cols);
+        cv::Point classIdPoint;
+        double maxClassScore;
+        cv::minMaxLoc(scores, nullptr, &maxClassScore, nullptr, &classIdPoint);
+
+        if (maxClassScore * conf < 0.05)
+          continue; // combined threshold
+
+        int classId = classIdPoint.x;
+        boxes.push_back(cv::Rect(x, y, width, height));
+        confidences.push_back(conf);
+        classIds.push_back(classId);
+      }
+
+      // Apply Non-Maximum Suppression
+      std::vector<int> indices;
+      const float nmsThreshold = 0.4f;
+      cv::dnn::NMSBoxes(boxes, confidences, 0.5f, nmsThreshold, indices);
+
+      // Draw final detections
+      for (int idx : indices)
+      {
+        cv::rectangle(frame, boxes[idx], cv::Scalar(255, 0, 0), 2);
+        cv::putText(frame, class_names[classIds[idx]], boxes[idx].tl(),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
       }
 
       cv::imshow("YOLO Detection", frame);
