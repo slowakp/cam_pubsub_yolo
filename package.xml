@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>cam_pubsub</name>
+  <name>cam_pubsub_yolo</name>
   <version>0.0.1</version>
   <description>Camera publisher and subscriber in ROS 2 Jazzy</description>
   <maintainer email="pawel.slowak@wat.edu.pl">pawel</maintainer>

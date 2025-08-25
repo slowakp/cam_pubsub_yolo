@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(cam_pubsub)
+project(cam_pubsub_yolo)
 
 include_directories(${cv_bridge_INCLUDE_DIRS})
 
@@ -28,6 +28,9 @@ ament_target_dependencies(camera_subscriber
   cv_bridge
   OpenCV
 )
+
+ament_target_dependencies(camera_subscriber rclcpp sensor_msgs cv_bridge OpenCV)
+target_link_libraries(camera_subscriber ${OpenCV_LIBS})
 
 install(TARGETS
   camera_publisher
