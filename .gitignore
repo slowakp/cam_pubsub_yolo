@@ -1,0 +1,17 @@
+# ROS 2 / colcon (w razie gdyby ktoś budował w paczce)
+build/
+install/
+log/
+
+# CMake dodatkowo
+CMakeFiles/
+CMakeCache.txt
+cmake-*
+*.user
+
+# Edytory / system
+.vscode/
+.idea/
+.DS_Store
+*.swp
+__pycache__/
