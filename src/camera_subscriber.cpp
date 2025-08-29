@@ -10,12 +10,23 @@ public:
   CameraSubscriber() : Node("camera_subscriber")
   {
     net_ = cv::dnn::readNetFromONNX("/home/pawel/ros2_ws/models/yolo/yolov5s.onnx");
-    net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-    net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+    net_.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+    net_.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
 
     subscription_ = this->create_subscription<sensor_msgs::msg::Image>(
         "camera/image_raw", 10,
         std::bind(&CameraSubscriber::topic_callback, this, std::placeholders::_1));
+
+    // Create OpenCV toggle button
+    cv::namedWindow("YOLO Detection", cv::WINDOW_AUTOSIZE);
+    cv::createButton("Toggle YOLO", [](int, void *userdata)
+        {
+          bool *flag = static_cast<bool *>(userdata);
+          *flag = !(*flag);
+          std::cout << "YOLO is now " << (*flag ? "ON" : "OFF") << std::endl;
+        },
+        &yolo_enabled_,
+        cv::QT_PUSH_BUTTON);
   }
 
 private:
@@ -25,73 +36,74 @@ private:
     {
       // Convert ROS image to OpenCV
       cv::Mat frame = cv_bridge::toCvCopy(msg, "bgr8")->image;
-
-      // Preprocess for YOLO
-      const cv::Size inputSize(640, 640);
-      cv::Mat blob = cv::dnn::blobFromImage(frame, 1.0 / 255.0, inputSize, cv::Scalar(), true, false);
-      net_.setInput(blob);
-
-      // Forward pass
-      std::vector<cv::Mat> outputs;
-      net_.forward(outputs, net_.getUnconnectedOutLayersNames());
-
-      cv::Mat pred = outputs[0].reshape(1, outputs[0].total() / 85); // Nx85
-      RCLCPP_INFO(this->get_logger(), "Detected objects: %d", pred.rows);
-
-      // Scaling factors from 640x640 to original frame
-      const float x_factor = float(frame.cols) / inputSize.width;
-      const float y_factor = float(frame.rows) / inputSize.height;
-
-      // Containers for NMS
-      std::vector<cv::Rect> boxes;
-      std::vector<float> confidences;
-      std::vector<int> classIds;
-
-      for (int i = 0; i < pred.rows; i++)
+      if (yolo_enabled_)
       {
-        float conf = pred.at<float>(i, 4);
-        if (conf < 0.5)
-          continue; // skip low confidence
+        // Preprocess for YOLO
+        const cv::Size inputSize(640, 640);
+        cv::Mat blob = cv::dnn::blobFromImage(frame, 1.0 / 255.0, inputSize, cv::Scalar(), true, false);
+        net_.setInput(blob);
 
-        // Bounding box coordinates
-        float cx = pred.at<float>(i, 0);
-        float cy = pred.at<float>(i, 1);
-        float w = pred.at<float>(i, 2);
-        float h = pred.at<float>(i, 3);
+        // Forward pass
+        std::vector<cv::Mat> outputs;
+        net_.forward(outputs, net_.getUnconnectedOutLayersNames());
 
-        int x = int((cx - w / 2.0f) * x_factor);
-        int y = int((cy - h / 2.0f) * y_factor);
-        int width = int(w * x_factor);
-        int height = int(h * y_factor);
+        cv::Mat pred = outputs[0].reshape(1, outputs[0].total() / 85); // Nx85
+        RCLCPP_INFO(this->get_logger(), "Detected objects: %d", pred.rows);
 
-        // Class detection
-        cv::Mat scores = pred.row(i).colRange(5, pred.cols);
-        cv::Point classIdPoint;
-        double maxClassScore;
-        cv::minMaxLoc(scores, nullptr, &maxClassScore, nullptr, &classIdPoint);
+        // Scaling factors from 640x640 to original frame
+        const float x_factor = float(frame.cols) / inputSize.width;
+        const float y_factor = float(frame.rows) / inputSize.height;
 
-        if (maxClassScore * conf < 0.05)
-          continue; // combined threshold
+        // Containers for NMS
+        std::vector<cv::Rect> boxes;
+        std::vector<float> confidences;
+        std::vector<int> classIds;
 
-        int classId = classIdPoint.x;
-        boxes.push_back(cv::Rect(x, y, width, height));
-        confidences.push_back(conf);
-        classIds.push_back(classId);
+        for (int i = 0; i < pred.rows; i++)
+        {
+          float conf = pred.at<float>(i, 4);
+          if (conf < 0.5)
+            continue; // skip low confidence
+
+          // Bounding box coordinates
+          float cx = pred.at<float>(i, 0);
+          float cy = pred.at<float>(i, 1);
+          float w = pred.at<float>(i, 2);
+          float h = pred.at<float>(i, 3);
+
+          int x = int((cx - w / 2.0f) * x_factor);
+          int y = int((cy - h / 2.0f) * y_factor);
+          int width = int(w * x_factor);
+          int height = int(h * y_factor);
+
+          // Class detection
+          cv::Mat scores = pred.row(i).colRange(5, pred.cols);
+          cv::Point classIdPoint;
+          double maxClassScore;
+          cv::minMaxLoc(scores, nullptr, &maxClassScore, nullptr, &classIdPoint);
+
+          if (maxClassScore * conf < 0.05)
+            continue; // combined threshold
+
+          int classId = classIdPoint.x;
+          boxes.push_back(cv::Rect(x, y, width, height));
+          confidences.push_back(conf);
+          classIds.push_back(classId);
+        }
+
+        // Apply Non-Maximum Suppression
+        std::vector<int> indices;
+        const float nmsThreshold = 0.4f;
+        cv::dnn::NMSBoxes(boxes, confidences, 0.5f, nmsThreshold, indices);
+
+        // Draw final detections
+        for (int idx : indices)
+        {
+          cv::rectangle(frame, boxes[idx], cv::Scalar(255, 0, 0), 2);
+          cv::putText(frame, class_names[classIds[idx]], boxes[idx].tl(),
+                      cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
+        }
       }
-
-      // Apply Non-Maximum Suppression
-      std::vector<int> indices;
-      const float nmsThreshold = 0.4f;
-      cv::dnn::NMSBoxes(boxes, confidences, 0.5f, nmsThreshold, indices);
-
-      // Draw final detections
-      for (int idx : indices)
-      {
-        cv::rectangle(frame, boxes[idx], cv::Scalar(255, 0, 0), 2);
-        cv::putText(frame, class_names[classIds[idx]], boxes[idx].tl(),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
-      }
-
       cv::imshow("YOLO Detection", frame);
       cv::waitKey(1);
     }
@@ -112,6 +124,7 @@ private:
       "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant", "bed",
       "dining table", "toilet", "TV", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven",
       "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"};
+  bool yolo_enabled_;
 };
 
 int main(int argc, char *argv[])
